@@ -1,0 +1,80 @@
+name: Publish APK
+
+run-name: Publish BrewSwipe ${{ inputs.version }}
+
+# Publishes an EAS-built BrewSwipe APK as this repo's latest release, so
+# https://github.com/Jospehty/brewswipe-android/releases/latest/download/BrewSwipe.apk
+# always serves the newest build. Run it with the artifact link from a
+# finished EAS Android build (expo.dev/artifacts/eas/....apk).
+
+on:
+    workflow_dispatch:
+        inputs:
+            apk_url:
+                description: EAS artifact link (https://expo.dev/artifacts/eas/....apk)
+                required: true
+                type: string
+            version:
+                description: Release tag, e.g. v1.1.3-2026-11-20
+                required: true
+                type: string
+            build_note:
+                description: One line on what this build is (shown in the release)
+                required: false
+                type: string
+
+permissions:
+    contents: write
+
+concurrency:
+    group: publish-apk
+    cancel-in-progress: false
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - name: Check out
+              uses: actions/checkout@v5
+
+            - name: Download and check the APK
+              env:
+                  APK_URL: ${{ inputs.apk_url }}
+              run: |
+                  if ! [[ "$APK_URL" =~ ^https://expo\.dev/artifacts/eas/[A-Za-z0-9_-]+\.apk$ ]]; then
+                    echo "apk_url must be an expo.dev EAS artifact link ending in .apk"
+                    exit 1
+                  fi
+                  curl -fsSL -o BrewSwipe.apk "$APK_URL"
+                  file BrewSwipe.apk | grep -q "Android package" || { echo "Not an APK"; exit 1; }
+                  echo "SHA256=$(sha256sum BrewSwipe.apk | cut -d' ' -f1)" >> "$GITHUB_ENV"
+                  ls -la BrewSwipe.apk
+
+            - name: Publish the release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ inputs.version }}
+                  BUILD_NOTE: ${{ inputs.build_note }}
+              run: |
+                  if ! [[ "$VERSION" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+                    echo "version must look like v1.1.3-2026-11-20"
+                    exit 1
+                  fi
+                  {
+                    echo "**Download:** [BrewSwipe.apk](https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/BrewSwipe.apk)"
+                    echo
+                    echo "### Installing"
+                    echo "1. Open the link above on your Android phone and download the file."
+                    echo "2. Open it. The first time, Android asks you to allow installs from your browser or Files app. Allow it, then tap **Install**."
+                    echo "3. Open BrewSwipe and sign up or log in."
+                    echo
+                    echo "The app updates itself: new features arrive the next time you open it, without reinstalling. A new APK here is only needed for bigger releases."
+                    echo
+                    if [ -n "$BUILD_NOTE" ]; then echo "$BUILD_NOTE"; echo; fi
+                    echo "SHA-256: \`${SHA256}\`"
+                  } > notes.md
+                  gh release create "$VERSION" BrewSwipe.apk \
+                    --title "BrewSwipe ${VERSION#v}" \
+                    --notes-file notes.md \
+                    --latest
